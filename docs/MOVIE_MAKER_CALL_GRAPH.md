@@ -1,5 +1,7 @@
 # SFM Movie Maker call graph: evidence-bounded reconstruction
 
+**Runtime status (2026-11-01): NOT CAPTURED.** The live check found no running SFM process and no available debugger; this remains a static call graph. See [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md) and [RUNTIME_TRACE_PLAN.md](RUNTIME_TRACE_PLAN.md). No runtime edge or pixel layout should be inferred from the static graph below.
+
 This graph separates static code references, binary metadata, and hypothesized runtime flow. `VERIFIED` edges are directly represented by instructions/xrefs; `STRONGLY SUPPORTED` edges combine direct code shape with labels/options; dotted edges are hypotheses or unresolved questions. The static MovieDoc frame/output path below was added in Phase 3. It does not prove that the menu action reaches it at runtime. The Phase 2 graph is retained afterward for its earlier viewport/API findings; its generic image-writer uncertainty is superseded by the Phase 3 `FUN_102b6610` findings.
 
 ## Phase 3 graph: MovieDoc frame output

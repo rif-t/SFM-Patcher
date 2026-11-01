@@ -1,6 +1,6 @@
 # Source Filmmaker Movie Maker and rendering pipeline research
 
-**Status:** research only. No hooks, pixel processing, renderer changes, or SFM-Patcher implementation were made. This is a snapshot of public source/docs and one installed x86 SFM build; repeat binary and runtime checks against other SFM builds. Phase 2 added static x86 disassembly, RTTI/vtable recovery and code/data cross-reference checks. Phase 3 reused the Ghidra project for targeted decompilation and callsite analysis. No runtime export trace was captured.
+**Status:** research only. No hooks, pixel processing, renderer changes, or SFM-Patcher implementation were made. This is a snapshot of public source/docs and one installed x86 SFM build; repeat binary and runtime checks against other SFM builds. Phase 2 added static x86 disassembly, RTTI/vtable recovery and code/data cross-reference checks. Phase 3 reused the Ghidra project for targeted decompilation and callsite analysis. The final runtime readiness check confirmed matching installed DLL fingerprints but did not capture an export trace: no SFM process or debugger was available, and no controlled output frame was inspected. See [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md) and [RUNTIME_TRACE_PLAN.md](RUNTIME_TRACE_PLAN.md).
 
 ## Evidence labels and scope
 
@@ -12,6 +12,13 @@
 SFM Movie Maker internals are proprietary. The public Valve Source SDK 2013 is an API/source reference and an engine analogue; it is not SFM source. An API declaration or an analogous replay renderer is never treated as proof that SFM calls that API. The installed files examined here are described by relative module names only; no per-user or machine-specific installation paths are part of this report.
 
 ## Executive findings
+
+### Final runtime readiness check (2026-11-01)
+
+- **VERIFIED:** the installed `sfm.exe` and checked engine/editor DLLs are x86 (`PE machine 0x014C`). The `ifm.dll`, `engine.dll`, `materialsystem.dll`, `shaderapidx9.dll`, and `video_services.dll` hashes match the binaries used in the prior static inventory. `sfm.exe` hash is recorded separately in [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md); it was not part of the six-DLL Ghidra fingerprint list.
+- **VERIFIED:** no SFM process was running and no supported debugger executable/package was found in the checked command locations/standard Windows Kits locations. Therefore no module bases, runtime breakpoint hits, output frame, or live buffer properties were captured.
+- **UNKNOWN:** export execution, buffer producer/layout/synchronization, viewport-resource sharing, depth semantics, and runtime file/command behavior remain unverified. The recommended next prototype boundary is offline processing of a copied, actually exported frame; no prototype implementation is included here.
+- See [RUNTIME_TRACE_PLAN.md](RUNTIME_TRACE_PLAN.md) for the reproducible trace and [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md) for the bounded environment results and integration-point assessment.
 
 1. **VERIFIED:** the examined SFM installation is 32-bit. Its `game/bin/tools/ifm.dll` is a large Qt/Python editor module exporting `CreateInterface` and `init_movieobjects`. Static strings identify Movie Maker / “layoff” UI, export settings, frame sequence controls, separate WAV audio, image sequence and movie output modes, and post-export command templates.
 2. **VERIFIED:** `ifm.dll` contains profiler-scope labels `CQViewportArea::OnRenderFinished` and `ReadPixelsFromLDRResultTexture`; disassembly shows the viewport code block allocates a pixel buffer and calls a read-like helper. **STRONGLY SUPPORTED:** the helper performs a Material-System-style readback. This is viewport-side evidence and does not establish Movie Maker use.
