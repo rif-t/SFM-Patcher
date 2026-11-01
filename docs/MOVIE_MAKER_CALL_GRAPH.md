@@ -1,6 +1,65 @@
 # SFM Movie Maker call graph: evidence-bounded reconstruction
 
-This graph separates static code references, binary metadata, and hypothesized runtime flow. `VERIFIED` edges are directly represented by RTTI or disassembled instructions. `STRONGLY SUPPORTED` edges combine code shape with labels/API shape. Dotted edges are hypotheses or unresolved questions. The graph is not a claim that every edge executes during export.
+This graph separates static code references, binary metadata, and hypothesized runtime flow. `VERIFIED` edges are directly represented by instructions/xrefs; `STRONGLY SUPPORTED` edges combine direct code shape with labels/options; dotted edges are hypotheses or unresolved questions. The static MovieDoc frame/output path below was added in Phase 3. It does not prove that the menu action reaches it at runtime. The Phase 2 graph is retained afterward for its earlier viewport/API findings; its generic image-writer uncertainty is superseded by the Phase 3 `FUN_102b6610` findings.
+
+## Phase 3 graph: MovieDoc frame output
+
+All addresses below are VAs in the fingerprinted x86 `ifm.dll` at image base `0x10000000`; subtract the base for RVA.
+
+```mermaid
+flowchart TD
+  subgraph UI[ifm.dll export UI and metadata]
+    Action["OnExportMovie string; no direct xref"]
+    Keys["ExportMovie / #BxExportMovie static refs"]
+    Dialogs["Layoff dialog Qt meta-cast helpers"]
+  end
+  subgraph MD[ifm.dll MovieDoc-labelled frame path]
+    Msg["FUN_102b9190<br/>particle-update message handler"]
+    Frame["FUN_102b86c0<br/>profiler label CMovieDoc::RenderFrameBegin"]
+    Step["FUN_102b8060<br/>frameRate, time/frame state, videoTarget"]
+    Output["FUN_102b75c0<br/>per-frame output / optional depth"]
+    Writer["FUN_102b6610<br/>numbered image and float-image writers"]
+    QImage["QImage wraps CPU buffer at this+0x234"]
+    Save["QImage::save at VA 0x102b6f0a"]
+    Buffer["buffer producer / color GPU readback UNKNOWN"]
+    Depth["unnamed interface slot +0x194<br/>depth transfer semantics STRONGLY SUPPORTED"]
+    End["FUN_102b5190<br/>layoff cleanup strongly supported"]
+    Proc["FUN_102a28d0<br/>QProcess helper"]
+  end
+  Action -.->|"UNKNOWN: slot/handler edge not recovered"| Frame
+  Keys -.->|"UNKNOWN: localization refs do not identify click handler"| Action
+  Dialogs -.->|"UNKNOWN: only qt_metacast behavior established"| Action
+  Msg -->|"VERIFIED direct call at 0x102b9222"| Frame
+  Frame -->|"VERIFIED conditional call at 0x102b874d"| Step
+  Step -->|"VERIFIED calls at 0x102b8447 / 0x102b8453 when videoTarget enabled"| Output
+  Output -->|"VERIFIED direct call at 0x102b7a8f"| Writer
+  Writer -->|"VERIFIED QImage construction over +0x234"| QImage
+  QImage -->|"VERIFIED call at 0x102b6f0a; numbered filename branch"| Save
+  Buffer -.->|"UNKNOWN: producer not traced to this buffer"| QImage
+  Output -.->|"STRONGLY SUPPORTED transfer; vtable method/resource unresolved"| Depth
+  Step -->|"VERIFIED cleanup/error call in decompilation"| End
+  Writer -->|"VERIFIED error paths call cleanup helper"| End
+  End -->|"VERIFIED calls at 0x102b534a / 0x102b53e7 with post/after command options"| Proc
+  Viewport["FUN_101a1b10 → FUN_1027e000<br/>separate viewport readback candidate"]
+  Viewport -.->|"UNKNOWN: no static edge to MovieDoc writer"| Buffer
+```
+
+### Phase 3 edge ledger
+
+| From → to | Classification | Evidence / limit |
+|---|---|---|
+| `FUN_102b9190` → `FUN_102b86c0` | **VERIFIED** | Direct call at `0x102b9222` after particle-update message handling succeeds. This does not identify an export-menu caller. |
+| `FUN_102b86c0` → `FUN_102b8060` | **VERIFIED** | Direct conditional call at `0x102b874d`; function carries `CMovieDoc::RenderFrameBegin` profiler label. |
+| `FUN_102b8060` → `FUN_102b75c0` | **VERIFIED** | Direct calls at `0x102b8447` and `0x102b8453`; branch checks `videoTarget`. |
+| `FUN_102b75c0` → `FUN_102b6610` | **VERIFIED** | Direct call at `0x102b7a8f`. |
+| `FUN_102b6610` → frame-number path and QImage writer | **VERIFIED** | Formats `"%s%06d%s.%s"`; wraps `this+0x234`; calls `QImage::save` at `0x102b6f0a` in `videoTarget` branches `5`/`8`. Mapping those values to a UI mode is **UNKNOWN**. |
+| Movie Maker click/`OnExportMovie()` → MovieDoc frame functions | **UNKNOWN** | No body/xref/signal connection recovered for the string. Dialog-name functions are Qt meta-cast helpers, not handlers. |
+| image buffer at `this+0x234` → GPU color readback | **UNKNOWN** | CPU image buffer and writer are visible; producer/resource/synchronization are not. |
+| optional depth interface call → transfer/read operation | **STRONGLY SUPPORTED** | Slot `DAT_10f4c774` +`0x194` receives rectangle-like args, buffer, `0x1d`, and stride; exact private method remains unknown. |
+| `FUN_102b5190` → `FUN_102a28d0` external command helper | **VERIFIED** | Calls at `0x102b534a`/`0x102b53e7`, supplied with post-render and after-render command/argument options. Specific runtime command use is unobserved. |
+| viewport readback path → MovieDoc image writer | **UNKNOWN** | No direct static edge; keep viewport and Movie Maker paths separate. |
+
+## Phase 2 baseline graph (retained)
 
 ## Reconstructed graph
 
@@ -82,7 +141,7 @@ flowchart TD
 | `CQLayoffMovieDialog` / `CQMovieLayoffSettingsDialog` / `CQtMovieLayoffProgress` → Qt dialog bases | **VERIFIED** | Parsed MSVC RTTI class hierarchy metadata. |
 | movie command labels/template → `QProcess` call sites | **STRONGLY SUPPORTED** | The command template includes `%9d.png` and MPEG-4 options; `ifm.dll` imports/calls Qt process APIs. No direct control-flow or argument-value link from template to the calls was recovered. |
 | `ifm.dll` process call sites → Qt `QProcess` methods | **VERIFIED** | Direct IAT calls include `startDetached` at RVA `0x113015`, `start` at `0x113241`, `waitForFinished` at `0x11324E`, and stdout read at `0x11325A`. These call sites are statically present; execution for export is unverified. |
-| `QImage::save` / `WriteFile` call sites → Movie Maker PNG frame writer | **UNKNOWN** | Imports and direct call sites exist, but their callers were not tied to Movie Maker export. |
+| `QImage::save` / `WriteFile` call sites → Movie Maker PNG frame writer | **Phase 2: UNKNOWN; updated in Phase 3** | Phase 3 directly tied `FUN_102b6610` to a `QImage::save` call from a MovieDoc-labelled frame-output chain. The export-menu-to-frame edge and execution during an actual export remain unverified. |
 | `valve_avi.dll` AVI write API → SFM Movie Maker | **UNKNOWN** | AVI writer APIs are imported by the module; no interface/call path from the editor was traced. |
 | viewport outer profiler label → inner `ReadPixelsFromLDRResultTexture` scope | **VERIFIED** | Both labels are passed to `tier0.dll` profiling calls in the same `CQViewportArea` code block. These labels are not function symbols. |
 | viewport block → buffer allocation and internal helper | **VERIFIED** | At `ifm.dll` RVA `0x1A1B10`–`0x1A1C29`, code computes width×height×4, allocates a buffer, then calls helper RVA `0x27E000` with seven stack args including target-like object, zero origin, dimensions, buffer and `0x0C`. |
@@ -94,6 +153,6 @@ flowchart TD
 
 ## Most valuable next runtime experiment
 
-Use a deterministic project with one selected frame, Image Sequence output and audio disabled. Under a read-only debugger/API trace, record call stacks and arguments for the viewport readback candidate, `QImage::save`, `WriteFile`, and D3D9/DXVK readback operations; then compare their execution during viewport-only rendering versus Movie Maker export. Decode the produced PNG and correlate dimensions and pixel values with candidate buffers. This single controlled experiment can decide whether Movie Maker reuses the viewport path, uses another Material System/D3D9 path, or writes through a separate pipeline.
+Phase 2 recommended a generic export trace. Phase 3 narrows the experiment to `FUN_102b86c0`, `FUN_102b8060`, `FUN_102b75c0`, `FUN_102b6610`, and the `QImage::save` call at `ifm.dll+0x2B6F0A`, with a watch on the buffer at object offset `+0x234`; see [MOVIE_MAKER_STATIC_ANALYSIS.md](MOVIE_MAKER_STATIC_ANALYSIS.md) for the current procedure.
 
 Use RVAs only after validating the exact module fingerprint; addresses in a live process are `module base + RVA` and may differ because of ASLR. No observation points have been instrumented in this research phase.
