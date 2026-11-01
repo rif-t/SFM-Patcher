@@ -1,6 +1,6 @@
 # Source Filmmaker Movie Maker and rendering pipeline research
 
-**Status:** research only. No hooks, pixel processing, renderer changes, or SFM-Patcher implementation were made. This is a snapshot of public source/docs and one installed x86 SFM build; repeat binary and runtime checks against other SFM builds.
+**Status:** research only. No hooks, pixel processing, renderer changes, or SFM-Patcher implementation were made. This is a snapshot of public source/docs and one installed x86 SFM build; repeat binary and runtime checks against other SFM builds. Phase 2 added static x86 disassembly, RTTI/vtable recovery and code/data cross-reference checks. No runtime export trace was captured.
 
 ## Evidence labels and scope
 
@@ -14,7 +14,7 @@ SFM Movie Maker internals are proprietary. The public Valve Source SDK 2013 is a
 ## Executive findings
 
 1. **VERIFIED:** the examined SFM installation is 32-bit. Its `game/bin/tools/ifm.dll` is a large Qt/Python editor module exporting `CreateInterface` and `init_movieobjects`. Static strings identify Movie Maker / “layoff” UI, export settings, frame sequence controls, separate WAV audio, image sequence and movie output modes, and post-export command templates.
-2. **VERIFIED:** strings in `ifm.dll` include the explicit viewport callback label `CQViewportArea::OnRenderFinished: ReadPixelsFromLDRResultTexture`. This establishes a named viewport readback path in the binary, not that Movie Maker uses it.
+2. **VERIFIED:** `ifm.dll` contains profiler-scope labels `CQViewportArea::OnRenderFinished` and `ReadPixelsFromLDRResultTexture`; disassembly shows the viewport code block allocates a pixel buffer and calls a read-like helper. **STRONGLY SUPPORTED:** the helper performs a Material-System-style readback. This is viewport-side evidence and does not establish Movie Maker use.
 3. **STRONGLY SUPPORTED:** Movie Maker has an export controller in the editor module and may render a sequence of frames for image-sequence output, with audio/export or movie assembly handled as a separate stage. Settings and template strings support this architecture, but binary strings alone do not prove the code path or timing.
 4. **UNKNOWN:** the exact SFM frame-render call sequence, target identity, final color format, synchronization, writer call, and whether any target is the swapchain backbuffer. No controlled export trace or matching test project/output was available.
 5. **VERIFIED:** Source SDK 2013 declares Material System readback and target interfaces. Its replay renderer has an explicit `ReadPixels` layoff example. These are useful analogues only; this SDK does not contain `CQMovieLayoff...` or SFM Movie Maker implementation.
@@ -27,7 +27,18 @@ SFM Movie Maker internals are proprietary. The public Valve Source SDK 2013 is a
 - Parsed PE machine type, export names, module imports, version metadata/strings, and printable strings. The inspected engine and editor modules above report PE machine `0x014c` (x86). Static strings are evidence of embedded labels or code/data references, not proof of an executed call.
 - Searched the official Valve `source-sdk-2013` source checkout. It has no exact SFM symbols such as `CQViewportArea`, `CQMovieLayoff`, or `OnExportMovie`.
 - Reviewed official Microsoft D3D9 docs, Khronos Vulkan specification/reference pages, DXVK implementation, ReShade API references, and used Context7 to locate/check Vulkan and ReShade API documentation.
-- Static decompilation and a controlled SFM export trace were not available in this session. REA MCP/native Windows PE analysis provider and PDB symbols were unavailable; no installed SFM PDBs were found. No SFM project was rendered during this research.
+- Phase 2 used Visual Studio `dumpbin` and temporary Capstone x86 disassembly to inspect call sites, PE imports/exports, RTTI, class hierarchies, vtable pointers, and direct string/IAT references. This was disassembly and metadata analysis, not decompilation. The CodeView record names an `ifm.pdb` with GUID/age, but that PDB was not present in the installation; COFF symbols are stripped. REA native PE analysis was not available. No controlled SFM export trace or test project was available.
+
+## Phase 2 binary-analysis update
+
+- **VERIFIED:** `ifm.dll` exports `CreateInterface` at RVA `0x980C20` and `init_movieobjects` at RVA `0x965720`; it does not export `OnExportMovie` or `ExportMovie`. `OnExportMovie()` and related strings do not have direct absolute-pointer references found by the static cross-reference scan. They are not evidence of a called function by themselves.
+- **VERIFIED:** RTTI identifies `CQLayoffMovieDialog`, `CQtMovieLayoffProgress`, `CQMovieLayoffSettingsDialog`, `CTempNeuteredMovieLayoffProgress`, `CPosterLayoff`, `CQViewportArea`, and `CMovieDoc`. The exact binary RTTI name `.?AVCQMovieLayoffProgress@@` was not found; `CQMovieLayoffProgress` occurs as a separate embedded string and may be Qt metadata.
+- **VERIFIED:** a `CQViewportArea` code block at RVA `0x1A1B10` contains profiler labels for `CQViewportArea::OnRenderFinished` and `ReadPixelsFromLDRResultTexture`. In the nested scope it allocates `width * height * 4` bytes and calls an internal helper at RVA `0x27E000` with target, rectangle, buffer and format-like arguments. That helper forwards six stack arguments to a virtual method. **STRONGLY SUPPORTED:** this is a Material-System-style pixel read for the viewport; the exact private interface and method identity remain unconfirmed. No Movie Maker-to-viewport edge was found.
+- **VERIFIED:** `ifm.dll` imports Qt `QProcess` launch/wait/read APIs, `QImage::save`, and Windows file APIs. There are direct call sites for process launch at RVA `0x113015`, process start at `0x113241`, wait at `0x11324E`, and output read at `0x11325A`. A movie-command template and labels are embedded nearby in the same module. **STRONGLY SUPPORTED:** the editor supports external command execution, plausibly including movie assembly. The exact export call path is still not tied to those sites.
+- **UNKNOWN:** whether any `QImage::save` call site writes Movie Maker frames. Static references and generic file APIs are not enough to establish the PNG/TGA writer or its caller.
+- **VERIFIED:** RTTI yields Qt dialog and VGUI progress class hierarchies and vtable addresses. RVAs, code-reference locations, import call sites, and module dependency findings are recorded in [BINARY_ANALYSIS.md](BINARY_ANALYSIS.md). Evidence-labeled flow is in [MOVIE_MAKER_CALL_GRAPH.md](MOVIE_MAKER_CALL_GRAPH.md).
+
+The most valuable next experiment is one-frame Image Sequence export from a controlled SFM project while tracing call stacks and data at the candidate readback, process, image-save and file-write sites, then correlating events with the resulting PNG. This will establish whether the viewport readback block runs during export and identify the export buffer/writer without changing the installation.
 
 ## Movie Maker modules, UI, settings, and responsibilities
 
@@ -86,7 +97,7 @@ Source engine + Material System + D3D9 shader API
 
 ### Viewport vs export divergence
 
-**VERIFIED:** `ifm.dll` has a viewport callback string `CQViewportArea::OnRenderFinished: ReadPixelsFromLDRResultTexture`. The export identifiers and settings coexist in that module, but there is no evidence that export consumes that viewport callback's texture. **UNKNOWN:** whether export renders into a dedicated off-screen target, a viewport target, a backbuffer, or a per-shot target. Therefore a ReShade present callback or screen capture must not be assumed to see exported pixels.
+**VERIFIED:** `ifm.dll` emits profiler labels for `CQViewportArea::OnRenderFinished` and its nested `ReadPixelsFromLDRResultTexture` block; disassembly shows a width×height×4 buffer allocation and a read-like internal helper call. **STRONGLY SUPPORTED:** this is a viewport Material-System-style readback. The export identifiers and settings coexist in `ifm.dll`, but no reference or trace links Movie Maker to this block. **UNKNOWN:** whether export renders into a dedicated off-screen target, a viewport target, a backbuffer, or a per-shot target. Therefore a ReShade present callback or screen capture must not be assumed to see exported pixels.
 
 ## Material System and interface availability
 
