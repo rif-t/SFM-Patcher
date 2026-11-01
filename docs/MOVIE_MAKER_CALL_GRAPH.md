@@ -1,6 +1,6 @@
 # SFM Movie Maker call graph: evidence-bounded reconstruction
 
-**Runtime status (2026-11-01): NOT CAPTURED.** The live check found no running SFM process and no available debugger; this remains a static call graph. See [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md) and [RUNTIME_TRACE_PLAN.md](RUNTIME_TRACE_PLAN.md). No runtime edge or pixel layout should be inferred from the static graph below.
+**Runtime status (2026-11-01): export-time save, output and a Material System buffer write observed.** The Movie Maker path reached `QtGui4!QImage::save`, which returned `1` for `a3000000.png`; the user confirmed the file exists. In a later export, a hardware write watch on the writer's CPU buffer stopped in a `materialsystem.dll` byte-copy loop at RVA `0x44224`, with a stack through `shaderapidx9.dll` back to `ifm.dll+0x2B67BE` inside `FUN_102B6610`. A separate callsite breakpoint confirmed the interface slot's Material System forwarding stub tail-jumps to `shaderapidx9.dll+0x1F100`. The store and forwarding dispatch are verified; stack-unwinding warnings make deeper caller edges strongly supported. The source bytes' origin and whether this is GPU readback remain unknown. See [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md) and [RUNTIME_TRACE_PLAN.md](RUNTIME_TRACE_PLAN.md).
 
 This graph separates static code references, binary metadata, and hypothesized runtime flow. `VERIFIED` edges are directly represented by instructions/xrefs; `STRONGLY SUPPORTED` edges combine direct code shape with labels/options; dotted edges are hypotheses or unresolved questions. The static MovieDoc frame/output path below was added in Phase 3. It does not prove that the menu action reaches it at runtime. The Phase 2 graph is retained afterward for its earlier viewport/API findings; its generic image-writer uncertainty is superseded by the Phase 3 `FUN_102b6610` findings.
 
@@ -23,7 +23,14 @@ flowchart TD
     Writer["FUN_102b6610<br/>numbered image and float-image writers"]
     QImage["QImage wraps CPU buffer at this+0x234"]
     Save["QImage::save at VA 0x102b6f0a"]
-    Buffer["buffer producer / color GPU readback UNKNOWN"]
+    Buffer["CPU buffer at this+0x234<br/>source / GPU origin UNKNOWN"]
+    Transfer["ifm vtable slot +0x194<br/>destination=this+0x234; private method UNKNOWN"]
+    MatStub["materialsystem.dll+0x2B670<br/>vtable slot +0x204 forwarding stub"]
+    ShaderEntry["shaderapidx9.dll+0x1F100<br/>runtime indirect-jump target"]
+    ShaderCopy["shaderapidx9.dll+0x13E90<br/>helper entered during export"]
+    MatDispatch["materialsystem.dll+0x0B5E0<br/>runtime call target; pending args include buffer"]
+    MatImpl["materialsystem.dll+0x48EC0<br/>runtime hit; pending args include buffer"]
+    MatCopy["materialsystem.dll+0x44200<br/>observed byte-copy loop"]
     Depth["unnamed interface slot +0x194<br/>depth transfer semantics STRONGLY SUPPORTED"]
     End["FUN_102b5190<br/>layoff cleanup strongly supported"]
     Proc["FUN_102a28d0<br/>QProcess helper"]
@@ -37,7 +44,15 @@ flowchart TD
   Output -->|"VERIFIED direct call at 0x102b7a8f"| Writer
   Writer -->|"VERIFIED QImage construction over +0x234"| QImage
   QImage -->|"VERIFIED call at 0x102b6f0a; numbered filename branch"| Save
-  Buffer -.->|"UNKNOWN: producer not traced to this buffer"| QImage
+  Writer -->|"VERIFIED runtime indirect call at RVA 0x2B67BC"| Transfer
+  Transfer -->|"VERIFIED call target at runtime"| MatStub
+  MatStub -->|"VERIFIED tail-jump target at runtime"| ShaderEntry
+  ShaderEntry -->|"VERIFIED call at +0x1F16D entered +0x13E90"| ShaderCopy
+  ShaderCopy -->|"VERIFIED indirect call target at +0x13F08"| MatDispatch
+  MatDispatch -->|"VERIFIED runtime execution; breakpoint at +0x48EC0"| MatImpl
+  MatImpl -.->|"STRONGLY SUPPORTED runtime stack; copy-site BP in same export"| MatCopy
+  MatCopy -->|"VERIFIED store at RVA 0x44224 to watched buffer address"| Buffer
+  Buffer -->|"VERIFIED consumed by QImage at this+0x234"| QImage
   Output -.->|"STRONGLY SUPPORTED transfer; vtable method/resource unresolved"| Depth
   Step -->|"VERIFIED cleanup/error call in decompilation"| End
   Writer -->|"VERIFIED error paths call cleanup helper"| End
@@ -56,7 +71,7 @@ flowchart TD
 | `FUN_102b75c0` → `FUN_102b6610` | **VERIFIED** | Direct call at `0x102b7a8f`. |
 | `FUN_102b6610` → frame-number path and QImage writer | **VERIFIED** | Formats `"%s%06d%s.%s"`; wraps `this+0x234`; calls `QImage::save` at `0x102b6f0a` in `videoTarget` branches `5`/`8`. Mapping those values to a UI mode is **UNKNOWN**. |
 | Movie Maker click/`OnExportMovie()` → MovieDoc frame functions | **UNKNOWN** | No body/xref/signal connection recovered for the string. Dialog-name functions are Qt meta-cast helpers, not handlers. |
-| image buffer at `this+0x234` → GPU color readback | **UNKNOWN** | CPU image buffer and writer are visible; producer/resource/synchronization are not. |
+| Movie Maker slot `+0x194` → Material System write into buffer | **STRONGLY SUPPORTED as interface-mediated pixel transfer; exact readback remains unknown** | The slot call at `ifm.dll` RVA `0x2B67BC` passes `this+0x234` as destination. Runtime stack from that call passes through `shaderapidx9.dll` to `materialsystem.dll+0x44200`, whose 4-byte-source/3-byte-destination loop wrote the watched byte. WinDbg unwind warnings limit deeper stack-edge confidence. GPU resource and synchronization are not identified. |
 | optional depth interface call → transfer/read operation | **STRONGLY SUPPORTED** | Slot `DAT_10f4c774` +`0x194` receives rectangle-like args, buffer, `0x1d`, and stride; exact private method remains unknown. |
 | `FUN_102b5190` → `FUN_102a28d0` external command helper | **VERIFIED** | Calls at `0x102b534a`/`0x102b53e7`, supplied with post-render and after-render command/argument options. Specific runtime command use is unobserved. |
 | viewport readback path → MovieDoc image writer | **UNKNOWN** | No direct static edge; keep viewport and Movie Maker paths separate. |

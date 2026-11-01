@@ -54,12 +54,18 @@ The direct instruction edges within this sequence are **VERIFIED**. Their identi
 
 `FUN_102B75C0`'s optional `writeDepth` path acquires an object through `DAT_10F4C774` vtable slot `+0x19C`, then calls that object's slot `+0x194` with rectangle-like local arguments, the buffer at `this + 0x234`, value `0x1D`, and a width-derived stride. It subsequently writes a `Pf` header and depth samples. This is **STRONGLY SUPPORTED** as an interface-mediated buffer transfer/read operation. The exact interface, method identity, source resource, GPU synchronization, and whether the color path uses the same operation are **UNKNOWN**. The vtable offset must not be named `ReadPixels` based only on the public SDK.
 
-In `FUN_102B6610`, slot `+0x19C` is also called to obtain an object, while a later slot `+0x194` call has no explicit buffer/rectangle arguments in the decompiler output. That call is not enough to identify a color readback. The origin and producer of `this + 0x234` are not yet traced. Therefore:
+In the static-only pass, slot `+0x19C` was seen obtaining an object, while a later slot `+0x194` call's arguments were not sufficiently recovered to identify color readback. At that point, the origin and producer of `this + 0x234` were unresolved. The runtime follow-up below supersedes that uncertainty in part:
 
 - **VERIFIED:** MovieDoc frame-output code consumes CPU-addressable image data and calls `QImage::save` or other writers.
 - **STRONGLY SUPPORTED:** the optional depth route copies/transfers data through an interface before PFM-style output.
-- **UNKNOWN:** whether Movie Maker color frames are read back from a GPU target, which target/resource is used, and what synchronization/format applies.
+- **UNKNOWN at static-analysis time:** whether Movie Maker color frames are read back from a GPU target, which target/resource is used, and what synchronization/format applies. Runtime evidence now strongly supports an interface-mediated pixel transfer into the CPU buffer, but the target/resource and GPU operation remain unknown.
 - The earlier `FUN_101A1B10` / `FUN_1027E000` chain remains viewport-side evidence only. No static edge joins it to this MovieDoc output sequence.
+
+### Runtime follow-up (2026-11-01)
+
+The static-only unknowns above were narrowed by a WinDbg export trace. At `FUN_102B6610+0x1AC` (module RVA `0x2B67BC`), Movie Maker makes an indirect call through receiver vtable slot `+0x194`, passing the destination at `this+0x234`, integer `3`, two local pointers, and a width-derived value. A hardware write watch on that destination then stopped in `materialsystem.dll+0x44227`; the preceding store at `+0x44224` wrote the watched byte. The routine reads source offsets `+2`, `+1`, `+0`, writes three sequential bytes, and advances source/destination by 4/3 bytes for `0x500` (1280) units. The unwound stack runs through `shaderapidx9.dll` back to `FUN_102B6610`, though WinDbg warns deeper frames may be inaccurate.
+
+This makes an export-time interface-mediated pixel transfer into the MovieDoc buffer **STRONGLY SUPPORTED**. It does not identify the private vtable method, source resource, GPU readback operation, synchronization, or channel semantics. Do not call it `ReadPixels` or assign a named pixel format without additional evidence. Full runtime evidence is in [RUNTIME_TRACE_RESULTS.md](RUNTIME_TRACE_RESULTS.md).
 
 ## Post-render commands and audio
 
@@ -79,4 +85,4 @@ An `audioTarget` setting string exists, but the inspected frame/output functions
 
 A meaningful experiment can now target known static addresses. With a deterministic one-frame Image Sequence export and audio disabled, capture call stacks and arguments at `FUN_102B86C0`, `FUN_102B8060`, `FUN_102B75C0`, `FUN_102B6610`, and the `QImage::save` callsite `ifm.dll+0x2B6F0A`. Add a read-only data watch on the frame buffer at object offset `+0x234`; record it immediately before/after `FUN_102B75C0` and before `QImage::save`, and correlate it with the emitted numbered image. Trace the indirect `DAT_10F4C774` slot calls and D3D9/DXVK transfer/fence events only after the buffer's producer is observed. Compare against a viewport-only frame to determine whether the paths share any target or readback.
 
-This experiment can verify the UI-to-frame entry, buffer producer, target, format, synchronization, and file result without changing GPU resources. No runtime trace or exported-frame inspection has been performed yet.
+This experiment has been partially performed: it verified the MovieDoc writer chain, successful PNG output, and the Material System buffer write above. The remaining highest-value observations are the source pointer's allocation/contents, the implementation behind vtable slot `+0x194`, and the GPU resource and synchronization, all without changing GPU resources.
