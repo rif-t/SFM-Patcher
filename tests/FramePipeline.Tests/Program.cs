@@ -1,4 +1,4 @@
-using SfmPatcher.FramePipeline;
+using ModernSfmPatcher.FramePipeline;
 
 static void Check(bool condition, string message)
 {

@@ -1,4 +1,4 @@
-namespace SfmPatcher.FramePipeline;
+namespace ModernSfmPatcher.FramePipeline;
 
 public enum PixelComponentType { UInt8, UInt16, Float16, Float32 }
 public enum ChannelLayout { Gray, GrayAlpha, RGB, BGR, RGBA, BGRA }

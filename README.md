@@ -1,33 +1,38 @@
-# SFM-Patcher
+# Modern SFM Patcher
 
-SFM-Patcher is a set of tools for SFM optimization and graphics support. The
-repository currently contains reverse-engineering notes and an independent
-frame-processing foundation; it does not yet contain the DXVK/ReShade installer
-described by the original project summary.
+**Current version: v0.1.0**
 
-## Frame Pipeline
+Modern SFM Patcher is a Windows utility for configuring Source Filmmaker's graphics setup, managing ReShade effects and presets, and developing a future renderer and post-processing extension for SFM.
 
-The optional offline pipeline has no SFM, GPU, or image-library dependency. Build
-and run its demonstration and self-contained tests with .NET 10:
+## What it does today
 
-```powershell
-dotnet build src/FramePipeline/FramePipeline.csproj -c Release
-dotnet run --project samples/FramePipeline.Demo/FramePipeline.Demo.csproj -c Release
-dotnet run --project tests/FramePipeline.Tests/FramePipeline.Tests.csproj -c Release
-```
+- Detects a Steam Source Filmmaker installation or lets you choose its game folder.
+- Installs and restores selectable x86 ReShade, DXVK, and REST Enhanced components.
+- Backs up files before changing them and preserves later user edits during restore.
+- Downloads selected ReShade shader packages and installs the Skibidi Kitty preset with its required shader and texture files.
+- Checks the current GitHub repository for its latest release and compares it with the running version. The checker reports when no release has been published yet.
 
-See [docs/FRAME_PIPELINE.md](docs/FRAME_PIPELINE.md) for its data model, limits,
-and the OpenEXR recommendation.
+The desktop app uses C# 14, .NET 10, and WinUI 3. The app is a self-contained x64 Windows process; SFM and its in-process graphics modules remain x86.
 
-## Installer
+## Build
 
-The first WinUI 3 installer is in `src/SfmPatcher.App`. It installs the pinned
-x86 ReShade 6.8.0 / DXVK 3.1.1 proxy chain into an SFM game folder and provides
-a backup restore action. Build it with:
+Build the WinUI app with:
 
 ```powershell
-dotnet build src/SfmPatcher.App/SfmPatcher.App.csproj -c Release
+dotnet build src/SfmPatcher.App/ModernSfmPatcher.csproj -c Release
 ```
 
-See [docs/INSTALLER.md](docs/INSTALLER.md) for artifact sources, backup
-behavior, and current validation limits.
+The optional offline Frame Pipeline is independent of SFM and the UI. Its model, current limits, and build instructions are in [docs/FRAME_PIPELINE.md](docs/FRAME_PIPELINE.md).
+
+## SFM integration research
+
+The longer-term goal is a renderer and post-processing extension integrated with SFM. The current installer does not acquire frames from SFM's rendering pipeline. Research into Movie Maker export, frame acquisition, and auxiliary buffers remains documented separately:
+
+- [Research overview](docs/RESEARCH.md)
+- [Runtime trace results](docs/RUNTIME_TRACE_RESULTS.md)
+- [Installer implementation and limits](docs/INSTALLER.md)
+
+## Creator
+
+- Discord: `skibidi_kitty`
+- YouTube: [rif-t-animation](https://www.youtube.com/@rif-t-animation)

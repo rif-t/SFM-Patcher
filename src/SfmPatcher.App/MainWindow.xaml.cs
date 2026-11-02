@@ -1,10 +1,11 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Windowing;
+using System.Net.Http.Headers;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
-namespace SfmPatcher.App;
+namespace ModernSfmPatcher.App;
 
 public sealed partial class MainWindow : Window
 {
@@ -16,12 +17,14 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<InstallerService.Release> _rest = [];
     private readonly List<ShaderPackageUi> _shaderPackages = [];
     private bool _updatingShaderSelection;
+    private static readonly HttpClient VersionHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     public MainWindow()
     {
         InitializeComponent();
+        AppVersionText.Text = $"Current version: v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.1.0"}";
         AppWindow.GetFromWindowId(Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this)))
-            .SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "SfmPatcher.ico"));
+            .SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "ModernSFMPatcher.ico"));
         GamePathBox.Text = InstallerService.DetectSfmInstall() ?? string.Empty;
         UpdateButtons();
         StatusText.Text = "Choose an SFM folder to install or remove its graphics setup.";
@@ -54,7 +57,7 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             Title = hasBackup ? "Restore backup and uninstall?" : "Remove graphics modules?",
             Content = hasBackup
-                ? "SFM-Patcher will restore the files backed up before installation."
+                ? "Modern SFM Patcher will restore the files backed up before installation."
                 : "This removes the recognized ReShade and DXVK DLLs. Your ReShade configuration is backed up; shaders and presets are kept.",
             PrimaryButtonText = hasBackup ? "Restore and uninstall" : "Remove",
             CloseButtonText = "Cancel",
@@ -92,6 +95,42 @@ public sealed partial class MainWindow : Window
 
     private async void CheckUpdatesButton_Click(object sender, RoutedEventArgs e) => await LoadVersionsAsync();
 
+    private async void CheckAppVersionButton_Click(object sender, RoutedEventArgs e)
+    {
+        CheckAppVersionButton.IsEnabled = false;
+        AppUpdateStatusText.Text = "Checking GitHub for the latest release…";
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://github.com/rif-t/SFM-Patcher/releases/latest");
+            request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
+            using var response = await VersionHttp.SendAsync(request);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                AppUpdateStatusText.Text = "No GitHub release has been published yet.";
+                return;
+            }
+            response.EnsureSuccessStatusCode();
+            var finalPath = response.RequestMessage?.RequestUri?.AbsolutePath ?? string.Empty;
+            const string tagMarker = "/releases/tag/";
+            var tagOffset = finalPath.IndexOf(tagMarker, StringComparison.OrdinalIgnoreCase);
+            if (tagOffset < 0)
+                throw new InvalidDataException("GitHub did not identify a latest release tag.");
+            var latestTag = Uri.UnescapeDataString(finalPath[(tagOffset + tagMarker.Length)..]).TrimEnd('/');
+            var latestText = latestTag.TrimStart('v', 'V');
+            var currentText = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+            if (!Version.TryParse(latestText, out var latest) || !Version.TryParse(currentText, out var current))
+                AppUpdateStatusText.Text = $"Latest GitHub release: {latestTag}. Current version: v{currentText}.";
+            else if (latest > current)
+                AppUpdateStatusText.Text = $"Update available: v{latestText}. Current version: v{currentText}.";
+            else if (latest == current)
+                AppUpdateStatusText.Text = $"You're up to date: v{currentText}.";
+            else
+                AppUpdateStatusText.Text = $"GitHub's latest is v{latestText}; this build is newer (v{currentText}).";
+        }
+        catch (Exception ex) { AppUpdateStatusText.Text = "Could not check GitHub releases: " + ex.Message; }
+        finally { CheckAppVersionButton.IsEnabled = true; }
+    }
+
     private void CheckAllShadersButton_Click(object sender, RoutedEventArgs e) => SetAllShaders(true);
     private void UncheckAllShadersButton_Click(object sender, RoutedEventArgs e) => SetAllShaders(false);
     private async void RefreshShadersButton_Click(object sender, RoutedEventArgs e) => await LoadShaderPackagesAsync();
@@ -115,7 +154,7 @@ public sealed partial class MainWindow : Window
 
     private async void RestoreShadersButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new ContentDialog { XamlRoot = Content.XamlRoot, Title = "Restore shader backup?", Content = "This restores or removes shader files managed by SFM-Patcher. Files you edited after installation are kept.", PrimaryButtonText = "Restore", CloseButtonText = "Cancel" };
+        var dialog = new ContentDialog { XamlRoot = Content.XamlRoot, Title = "Restore shader backup?", Content = "This restores or removes shader files managed by Modern SFM Patcher. Files you edited after installation are kept.", PrimaryButtonText = "Restore", CloseButtonText = "Cancel" };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary || _working) return;
         SetBusy(true);
         try { ShaderStatusText.Text = await _installer.RestoreShadersAsync(GamePathBox.Text.Trim()); }
@@ -138,7 +177,7 @@ public sealed partial class MainWindow : Window
 
     private async void RestorePresetButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new ContentDialog { XamlRoot = Content.XamlRoot, Title = "Restore preset and shader files?", Content = "This restores or removes preset files managed by SFM-Patcher. Files you edited after installation are kept.", PrimaryButtonText = "Restore", CloseButtonText = "Cancel" };
+        var dialog = new ContentDialog { XamlRoot = Content.XamlRoot, Title = "Restore preset and shader files?", Content = "This restores or removes preset files managed by Modern SFM Patcher. Files you edited after installation are kept.", PrimaryButtonText = "Restore", CloseButtonText = "Cancel" };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary || _working) return;
         SetBusy(true);
         try { PresetStatusText.Text = await _installer.RestoreShadersAsync(GamePathBox.Text.Trim()); }
@@ -203,6 +242,7 @@ public sealed partial class MainWindow : Window
         RestoreShadersButton.IsEnabled = !_working && valid && _installer.HasShaderBackup(path);
         InstallPresetButton.IsEnabled = !_working && valid;
         RestorePresetButton.IsEnabled = !_working && valid && _installer.HasShaderBackup(path);
+        CheckAppVersionButton.IsEnabled = !_working;
         InstallButton.Content = installed ? "Reinstall / repair setup" : "Install graphics setup";
     }
 

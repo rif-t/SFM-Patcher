@@ -8,11 +8,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
-namespace SfmPatcher.App;
+namespace ModernSfmPatcher.App;
 
 internal sealed class InstallerService
 {
     private const string ReshadeSignerThumbprint = "589690208A5E52FB96980C4A6698F50ACD47C49F";
+    // Keep this legacy location so upgrades can still restore existing backups and cached versions.
     private static readonly string StateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SFM-Patcher", "installs");
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
@@ -56,7 +57,7 @@ internal sealed class InstallerService
     private static async Task<(IReadOnlyList<Release> Dxvk, IReadOnlyList<ReShadeRelease> ReShade, IReadOnlyList<Release> RestReleases)> GetUpstreamReleasesAsync(CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/doitsujin/dxvk/releases?per_page=100");
-        request.Headers.UserAgent.ParseAdd("SFM-Patcher/1.0");
+        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
         using var response = await Http.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var dxvkJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
@@ -65,7 +66,7 @@ internal sealed class InstallerService
                 .Select(a => new Release(r.GetProperty("tag_name").GetString()!.TrimStart('v'), a.GetProperty("browser_download_url").GetString()!, ReadSha256(a))))
             .Where(r => r.Sha256.Length == 64).ToArray();
         using var tagRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/crosire/reshade/tags?per_page=100");
-        tagRequest.Headers.UserAgent.ParseAdd("SFM-Patcher/1.0");
+        tagRequest.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
         using var tagResponse = await Http.SendAsync(tagRequest, token);
         tagResponse.EnsureSuccessStatusCode();
         using var tagJson = JsonDocument.Parse(await tagResponse.Content.ReadAsStringAsync(token));
@@ -80,7 +81,7 @@ internal sealed class InstallerService
     private static async Task<IReadOnlyList<Release>> GetGithubReleasesAsync(string url, string assetName, CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("SFM-Patcher/1.0");
+        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
         using var response = await Http.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
@@ -215,7 +216,7 @@ internal sealed class InstallerService
             {
                 var target = SafeCombine(gameRoot, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                var temporary = target + ".sfm-patcher-tmp";
+                var temporary = target + ".modern-sfm-patcher-tmp";
                 try { File.Copy(staged, temporary, overwrite: true); File.Move(temporary, target, overwrite: true); }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
@@ -230,7 +231,7 @@ internal sealed class InstallerService
         if (Process.GetProcessesByName("sfm").Any(p => SamePath(p, Path.Combine(gameRoot, "sfm.exe"))))
             throw new InvalidOperationException("Close Source Filmmaker before restoring shader files.");
         var stateFile = Path.Combine(StateDirectory(gameRoot), "shaders.json");
-        if (!File.Exists(stateFile)) throw new InvalidOperationException("No SFM-Patcher shader installation backup exists.");
+        if (!File.Exists(stateFile)) throw new InvalidOperationException("No Modern SFM Patcher shader installation backup exists.");
         var state = JsonSerializer.Deserialize<ShaderState>(await File.ReadAllTextAsync(stateFile, token)) ?? throw new InvalidDataException("Shader backup manifest is invalid.");
         if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Shader backup belongs to another SFM folder.");
         var keptModified = new List<string>();
@@ -262,6 +263,31 @@ internal sealed class InstallerService
         var textureRoot = Path.Combine(presetRoot, "Textures");
         if (!File.Exists(presetFile) || !Directory.Exists(shaderRoot) || !Directory.Exists(textureRoot))
             throw new DirectoryNotFoundException("The bundled Skibidi Kitty preset files are missing.");
+
+        var bundledEffects = Directory.EnumerateFiles(shaderRoot, "*.fx", SearchOption.AllDirectories)
+            .Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var techniqueLine = File.ReadLines(presetFile).FirstOrDefault(line => line.TrimStart().StartsWith("Techniques=", StringComparison.OrdinalIgnoreCase));
+        var requiredEffects = techniqueLine?[(techniqueLine.IndexOf('=') + 1)..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(technique => technique[(technique.LastIndexOf('@') + 1)..]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            ?? throw new InvalidDataException("The preset does not list any ReShade techniques.");
+        var missingEffects = requiredEffects.Where(effect => !bundledEffects.Contains(effect)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (missingEffects.Count > 0)
+        {
+            progress.Report("Loading official ReShade shader packages for the preset…");
+            var packages = await GetShaderPackagesAsync(token);
+            var selections = new List<ShaderSelection>();
+            foreach (var effect in missingEffects)
+            {
+                var package = packages.FirstOrDefault(item => item.EffectFiles.Contains(effect, StringComparer.OrdinalIgnoreCase))
+                    ?? throw new InvalidDataException($"No official ReShade package lists the preset effect {effect}.");
+                var selection = selections.FirstOrDefault(item => ReferenceEquals(item.Package, package));
+                if (selection is null)
+                    selections.Add(new ShaderSelection(package, [effect]));
+                else
+                    selections[selections.IndexOf(selection)] = selection with { Effects = selection.Effects.Append(effect).ToArray() };
+            }
+            await InstallShadersAsync(gameRoot, selections, progress, token);
+        }
 
         var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -322,7 +348,7 @@ internal sealed class InstallerService
             {
                 var target = SafeCombine(gameRoot, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                var replacement = target + ".sfm-patcher-tmp";
+                var replacement = target + ".modern-sfm-patcher-tmp";
                 try { File.Copy(temporary, replacement, overwrite: true); File.Move(replacement, target, overwrite: true); }
                 finally { if (File.Exists(replacement)) File.Delete(replacement); }
             }
@@ -459,12 +485,12 @@ internal sealed class InstallerService
         }
         catch (IOException ex)
         {
-            throw new InvalidOperationException("Another SFM-Patcher operation is already installing graphics files for this SFM folder. Wait for it to finish, then try again.", ex);
+            throw new InvalidOperationException("Another Modern SFM Patcher operation is already installing graphics files for this SFM folder. Wait for it to finish, then try again.", ex);
         }
         using (operationLock)
         {
         if (HasBackup(gameRoot))
-            throw new InvalidOperationException("This SFM installation already has an active SFM-Patcher backup. Restore it before installing again.");
+            throw new InvalidOperationException("This SFM installation already has an active Modern SFM Patcher backup. Restore it before installing again.");
         if (Process.GetProcessesByName("sfm").Any(p => SamePath(p, Path.Combine(gameRoot, "sfm.exe"))))
             throw new InvalidOperationException("Close Source Filmmaker before installing so its DLLs are not locked.");
 
@@ -608,7 +634,7 @@ internal sealed class InstallerService
         if (Process.GetProcessesByName("sfm").Any(p => SamePath(p, Path.Combine(gameRoot, "sfm.exe"))))
             throw new InvalidOperationException("Close Source Filmmaker before restoring an add-on.");
         var statePath = Path.Combine(StateDirectory(gameRoot), "rest.json");
-        if (!File.Exists(statePath)) throw new InvalidOperationException("No SFM-Patcher REST add-on backup exists.");
+        if (!File.Exists(statePath)) throw new InvalidOperationException("No Modern SFM Patcher REST add-on backup exists.");
         var state = JsonSerializer.Deserialize<RestState>(await File.ReadAllTextAsync(statePath, token)) ?? throw new InvalidDataException("REST backup manifest is invalid.");
         if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("REST backup belongs to another SFM folder.");
         var target = Path.Combine(gameRoot, "bin", "ReshadeEffectShaderToggler.addon32");
@@ -696,12 +722,12 @@ internal sealed class InstallerService
         gameRoot = ValidateGameRoot(gameRoot);
         var stateFile = StateFile(gameRoot);
         if (!File.Exists(stateFile))
-            throw new InvalidOperationException("No SFM-Patcher backup exists for this folder.");
+            throw new InvalidOperationException("No Modern SFM Patcher backup exists for this folder.");
         if (Process.GetProcessesByName("sfm").Any(p => SamePath(p, Path.Combine(gameRoot, "sfm.exe"))))
             throw new InvalidOperationException("Close Source Filmmaker before restoring files so its DLLs are not locked.");
 
         var state = JsonSerializer.Deserialize<InstallState>(await File.ReadAllTextAsync(stateFile, cancellationToken))
-            ?? throw new InvalidDataException("The SFM-Patcher backup manifest is invalid.");
+            ?? throw new InvalidDataException("The Modern SFM Patcher backup manifest is invalid.");
         if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The backup belongs to a different SFM folder.");
 

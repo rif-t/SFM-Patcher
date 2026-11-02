@@ -1,4 +1,4 @@
-# Ghidra workflow for SFM-Patcher
+# Ghidra workflow for Modern SFM Patcher
 
 Use the dedicated Ghidra project for static analysis of the installed SFM build. Keep the project, Ghidra installation, JDK, uv environment and MCP extension outside this repository. The repository stores only findings and reproducible instructions, not databases or binary dumps.
 

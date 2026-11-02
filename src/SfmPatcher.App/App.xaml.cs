@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 
-namespace SfmPatcher.App;
+namespace ModernSfmPatcher.App;
 public partial class App : Application
 {
     private Window? _window;
@@ -15,7 +15,7 @@ public partial class App : Application
     {
         UnhandledException += (_, e) =>
         {
-            MessageBoxW(0, e.Message, "SFM-Patcher startup error", 0x10);
+            MessageBoxW(0, e.Message, "Modern SFM Patcher startup error", 0x10);
         };
 
         try
@@ -25,7 +25,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            MessageBoxW(0, ex.ToString(), "SFM-Patcher startup error", 0x10);
+            MessageBoxW(0, ex.ToString(), "Modern SFM Patcher startup error", 0x10);
         }
     }
 }

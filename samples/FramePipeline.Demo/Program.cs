@@ -1,4 +1,4 @@
-using SfmPatcher.FramePipeline;
+using ModernSfmPatcher.FramePipeline;
 
 var input = new Frame(2, 1, PixelComponentType.UInt8, ChannelLayout.RGBA, 8,
     ColorSpace.SRgb, AlphaMode.Straight, RenderPass.Color,
