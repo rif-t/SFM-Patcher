@@ -1,6 +1,6 @@
 # Modern SFM Patcher
 
-**Current version: v0.1.0**
+**Current version: v0.2.0**
 
 Modern SFM Patcher is a Windows utility for configuring Source Filmmaker's graphics setup, managing ReShade effects and presets, and developing a future renderer and post-processing extension for SFM.
 
@@ -8,11 +8,14 @@ Modern SFM Patcher is a Windows utility for configuring Source Filmmaker's graph
 
 - Detects a Steam Source Filmmaker installation or lets you choose its game folder.
 - Installs and restores selectable x86 ReShade, DXVK, and REST Enhanced components.
+- Optionally imports and installs a custom `dxvk.conf`, with backup and restore support.
+- Selects DXVK HUD metrics such as FPS, DXVK version, GPU/driver, frame times, and memory statistics.
 - Backs up files before changing them and preserves later user edits during restore.
+- Exports a local diagnostics report with app, Windows, SFM, DXVK, and ReShade details.
 - Downloads selected ReShade shader packages and installs the Skibidi Kitty preset with its required shader and texture files.
 - Checks the current GitHub repository for its latest release and compares it with the running version. The checker reports when no release has been published yet.
 
-The desktop app uses C# 14, .NET 10, and WinUI 3. The app is a self-contained x64 Windows process; SFM and its in-process graphics modules remain x86.
+The desktop app uses C# 14, .NET 10, and WinUI 3. The app is a self-contained x64 Windows process; recipients do not need .NET installed. Its configured minimum is Windows 10 version 21H2 (build 19044); SFM and its in-process graphics modules remain x86. Microsoft’s .NET 10 support matrix limits Windows 10 support to Enterprise/LTSC editions, so Windows 10 Home/Pro execution is best-effort and still needs validation on an actual Windows 10 device ([.NET support matrix](https://learn.microsoft.com/en-us/dotnet/core/install/windows), [Windows App SDK support](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/support)).
 
 ## Build
 

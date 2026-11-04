@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 set "PROJECT=src\SfmPatcher.App\ModernSfmPatcher.csproj"
 set "OUTPUT=release\Modern-SFM-Patcher"
-set "ZIP=release\Modern-SFM-Patcher-v0.1.0-win-x64.zip"
+set "ZIP=release\Modern-SFM-Patcher-v0.2.0-win-x64.zip"
 
 if not exist "%PROJECT%" (
     echo Project not found: %PROJECT%

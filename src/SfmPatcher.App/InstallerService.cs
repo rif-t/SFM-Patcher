@@ -24,6 +24,7 @@ internal sealed class InstallerService
         string InstallPath, string TextureInstallPath, string[] EffectFiles, bool Required, bool Enabled);
     internal sealed record ShaderSelection(ShaderPackage Package, IReadOnlyList<string> Effects);
     private sealed record RestState(string GameRoot, string? BackupPath, string InstalledHash, string Version);
+    private sealed record DxvkConfigState(string GameRoot, bool OriginalExisted);
     private sealed class ShaderState
     {
         public required string GameRoot { get; init; }
@@ -57,7 +58,7 @@ internal sealed class InstallerService
     private static async Task<(IReadOnlyList<Release> Dxvk, IReadOnlyList<ReShadeRelease> ReShade, IReadOnlyList<Release> RestReleases)> GetUpstreamReleasesAsync(CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/doitsujin/dxvk/releases?per_page=100");
-        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
+        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.2.0");
         using var response = await Http.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var dxvkJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
@@ -66,7 +67,7 @@ internal sealed class InstallerService
                 .Select(a => new Release(r.GetProperty("tag_name").GetString()!.TrimStart('v'), a.GetProperty("browser_download_url").GetString()!, ReadSha256(a))))
             .Where(r => r.Sha256.Length == 64).ToArray();
         using var tagRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/crosire/reshade/tags?per_page=100");
-        tagRequest.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
+        tagRequest.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.2.0");
         using var tagResponse = await Http.SendAsync(tagRequest, token);
         tagResponse.EnsureSuccessStatusCode();
         using var tagJson = JsonDocument.Parse(await tagResponse.Content.ReadAsStringAsync(token));
@@ -81,7 +82,7 @@ internal sealed class InstallerService
     private static async Task<IReadOnlyList<Release>> GetGithubReleasesAsync(string url, string assetName, CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.1.0");
+        request.Headers.UserAgent.ParseAdd("ModernSfmPatcher/0.2.0");
         using var response = await Http.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
@@ -128,7 +129,7 @@ internal sealed class InstallerService
         return packages;
     }
 
-    public async Task InstallShadersAsync(string gameRoot, IReadOnlyList<ShaderSelection> selections,
+    public async Task<IReadOnlyList<string>> InstallShadersAsync(string gameRoot, IReadOnlyList<ShaderSelection> selections,
         IProgress<string> progress, CancellationToken token = default)
     {
         gameRoot = ValidateGameRoot(gameRoot);
@@ -144,6 +145,7 @@ internal sealed class InstallerService
             : new ShaderState { GameRoot = gameRoot };
         if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Shader backup belongs to another SFM folder.");
         var stagedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var missingEffects = new List<string>();
         try
         {
             foreach (var selection in selections)
@@ -158,6 +160,7 @@ internal sealed class InstallerService
                 using var zip = new ZipArchive(archiveFile, ZipArchiveMode.Read);
                 var root = zip.Entries.Select(e => e.FullName.Split('/')[0]).FirstOrDefault() ?? "";
                 var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var packageFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var entry in zip.Entries)
                 {
                     token.ThrowIfCancellationRequested();
@@ -184,13 +187,27 @@ internal sealed class InstallerService
                     if (target is null) continue;
                     var staged = Path.Combine(stageDir, Guid.NewGuid().ToString("N"));
                     await using (var input = entry.Open()) await using (var output = File.Create(staged)) await input.CopyToAsync(output, token);
+                    if (packageFiles.TryGetValue(target, out var duplicate) && !HashFile(duplicate).Equals(HashFile(staged), StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException($"More than one selected package provides a different file at {target}.");
+                    packageFiles[target] = staged;
+                }
+                File.Delete(archive);
+                missingEffects.AddRange(chosen.Where(effect => !found.Contains(effect)).Select(effect => $"{effect} ({package.Name})"));
+                if (found.Count == 0)
+                {
+                    progress.Report($"Skipped {package.Name}: its current archive did not contain the selected effect files.");
+                    continue;
+                }
+                foreach (var (target, staged) in packageFiles)
+                {
                     if (stagedFiles.TryGetValue(target, out var duplicate) && !HashFile(duplicate).Equals(HashFile(staged), StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException($"More than one selected package provides a different file at {target}.");
                     stagedFiles[target] = staged;
                 }
-                File.Delete(archive);
-                if (chosen.Any(effect => !found.Contains(effect))) throw new InvalidDataException($"{package.Name} archive did not contain all selected effects.");
             }
+
+            if (stagedFiles.Count == 0)
+                throw new InvalidDataException("None of the selected effects were present in their current shader package archives. Refresh the list and try again.");
 
             var updated = new ShaderState { GameRoot = gameRoot, OriginalFiles = new(state.OriginalFiles, StringComparer.OrdinalIgnoreCase), InstalledHashes = new(state.InstalledHashes, StringComparer.OrdinalIgnoreCase) };
             foreach (var (relative, staged) in stagedFiles)
@@ -221,6 +238,7 @@ internal sealed class InstallerService
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
             progress.Report($"Installed or updated {stagedFiles.Count} shader support files from the selected latest repositories.");
+            return missingEffects;
         }
         finally { TryDeleteDirectory(stageDir); }
     }
@@ -252,6 +270,28 @@ internal sealed class InstallerService
         return keptModified.Count == 0 ? "Shader backup restored." : "Restored unchanged shader files; kept later edits to: " + string.Join(", ", keptModified);
     }
 
+    public static string[] GetMissingPresetEffects(string gameRoot)
+    {
+        gameRoot = ValidateGameRoot(gameRoot);
+        var presetRoot = Path.Combine(AppContext.BaseDirectory, "Assets", "SkibidiKittyPreset");
+        var presetFile = Path.Combine(presetRoot, "ReShadePreset.ini");
+        var shaderRoot = Path.Combine(presetRoot, "Shaders");
+        if (!File.Exists(presetFile) || !Directory.Exists(shaderRoot))
+            throw new DirectoryNotFoundException("The bundled Skibidi Kitty preset files are missing.");
+
+        var bundledEffects = Directory.EnumerateFiles(shaderRoot, "*.fx", SearchOption.AllDirectories)
+            .Select(path => Path.GetFileName(path)!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var techniqueLine = File.ReadLines(presetFile).FirstOrDefault(line => line.TrimStart().StartsWith("Techniques=", StringComparison.OrdinalIgnoreCase));
+        var requiredEffects = techniqueLine?[(techniqueLine.IndexOf('=') + 1)..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(technique => technique[(technique.LastIndexOf('@') + 1)..]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            ?? throw new InvalidDataException("The preset does not list any ReShade techniques.");
+        var installedRoot = Path.Combine(gameRoot, "bin", "reshade-shaders", "Shaders");
+        var installedEffects = Directory.Exists(installedRoot)
+            ? Directory.EnumerateFiles(installedRoot, "*.fx", SearchOption.AllDirectories).Select(path => Path.GetFileName(path)!).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return requiredEffects.Where(effect => !bundledEffects.Contains(effect) && !installedEffects.Contains(effect)).ToArray();
+    }
+
     public async Task InstallSkibidiKittyPresetAsync(string gameRoot, IProgress<string> progress, CancellationToken token = default)
     {
         gameRoot = ValidateGameRoot(gameRoot);
@@ -264,14 +304,8 @@ internal sealed class InstallerService
         if (!File.Exists(presetFile) || !Directory.Exists(shaderRoot) || !Directory.Exists(textureRoot))
             throw new DirectoryNotFoundException("The bundled Skibidi Kitty preset files are missing.");
 
-        var bundledEffects = Directory.EnumerateFiles(shaderRoot, "*.fx", SearchOption.AllDirectories)
-            .Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var techniqueLine = File.ReadLines(presetFile).FirstOrDefault(line => line.TrimStart().StartsWith("Techniques=", StringComparison.OrdinalIgnoreCase));
-        var requiredEffects = techniqueLine?[(techniqueLine.IndexOf('=') + 1)..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Select(technique => technique[(technique.LastIndexOf('@') + 1)..]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-            ?? throw new InvalidDataException("The preset does not list any ReShade techniques.");
-        var missingEffects = requiredEffects.Where(effect => !bundledEffects.Contains(effect)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (missingEffects.Count > 0)
+        var missingEffects = GetMissingPresetEffects(gameRoot);
+        if (missingEffects.Length > 0)
         {
             progress.Report("Loading official ReShade shader packages for the preset…");
             var packages = await GetShaderPackagesAsync(token);
@@ -286,7 +320,9 @@ internal sealed class InstallerService
                 else
                     selections[selections.IndexOf(selection)] = selection with { Effects = selection.Effects.Append(effect).ToArray() };
             }
-            await InstallShadersAsync(gameRoot, selections, progress, token);
+            var unavailableEffects = await InstallShadersAsync(gameRoot, selections, progress, token);
+            if (unavailableEffects.Count > 0)
+                throw new InvalidDataException("The preset still requires effects missing from current ReShade archives: " + string.Join(", ", unavailableEffects));
         }
 
         var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -379,12 +415,124 @@ internal sealed class InstallerService
         public required string BackupPath { get; init; }
         public required string? PreviousModuleOverride { get; init; }
         public Dictionary<string, string?> OriginalFiles { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> OriginalHashes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> InstalledHashes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public bool InstallationComplete { get; set; } = true;
     }
 
     public bool HasBackup(string gameRoot) => File.Exists(StateFile(gameRoot));
     public bool HasRestBackup(string gameRoot) => File.Exists(Path.Combine(StateDirectory(gameRoot), "rest.json"));
     public bool HasShaderBackup(string gameRoot) => File.Exists(Path.Combine(StateDirectory(gameRoot), "shaders.json"));
+    public string? GetBackupDirectory(string gameRoot) => HasBackup(gameRoot) ? StateDirectory(gameRoot) : null;
+
+    public bool CanInstallWithExistingBackup(string gameRoot)
+    {
+        if (!HasBackup(gameRoot)) return true;
+        if (!IsInstallationComplete(gameRoot)) return false;
+        var bin = Path.Combine(gameRoot, "bin");
+        return !File.Exists(Path.Combine(bin, "d3d9.dll")) && !File.Exists(Path.Combine(bin, "dxvk", "d3d9.dll"));
+    }
+
+    public bool IsInstallationComplete(string gameRoot)
+    {
+        try
+        {
+            var state = JsonSerializer.Deserialize<InstallState>(File.ReadAllText(StateFile(gameRoot)));
+            return state is not null && Path.GetFullPath(state.GameRoot).Equals(Path.GetFullPath(gameRoot), StringComparison.OrdinalIgnoreCase) && state.InstallationComplete;
+        }
+        catch (FileNotFoundException) { return true; }
+        catch (JsonException) { return false; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    public static bool IsSfmRunning(string gameRoot) =>
+        Process.GetProcessesByName("sfm").Any(process => SamePath(process, Path.Combine(gameRoot, "sfm.exe")));
+
+    public static string ValidateDxvkConfiguration(string? configuration)
+    {
+        if (string.IsNullOrWhiteSpace(configuration))
+            throw new InvalidDataException("The DXVK configuration is empty.");
+        if (configuration.Contains('\0'))
+            throw new InvalidDataException("The DXVK configuration contains a null character.");
+        if (Encoding.UTF8.GetByteCount(configuration) > 1_048_576)
+            throw new InvalidDataException("DXVK configuration files must be 1 MB or smaller.");
+        return configuration;
+    }
+
+    public bool HasDxvkConfigurationBackup(string gameRoot) => File.Exists(DxvkConfigStateFile(gameRoot));
+
+    public void SaveDxvkConfiguration(string gameRoot, string configuration)
+    {
+        gameRoot = ValidateGameRoot(gameRoot);
+        configuration = ValidateDxvkConfiguration(configuration);
+        EnsureSfmClosed(gameRoot, "saving DXVK configuration");
+        var stateDir = StateDirectory(gameRoot);
+        Directory.CreateDirectory(stateDir);
+        using var operationLock = AcquireGraphicsOperationLock(stateDir);
+
+        var configPath = Path.Combine(gameRoot, "dxvk.conf");
+        var statePath = DxvkConfigStateFile(gameRoot);
+        if (File.Exists(statePath))
+        {
+            var state = JsonSerializer.Deserialize<DxvkConfigState>(File.ReadAllText(statePath))
+                ?? throw new InvalidDataException("The DXVK configuration backup is invalid.");
+            if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The DXVK configuration backup belongs to another SFM folder.");
+            if (state.OriginalExisted && !File.Exists(Path.Combine(stateDir, "dxvk.conf.original")))
+                throw new FileNotFoundException("The original DXVK configuration backup is missing.", Path.Combine(stateDir, "dxvk.conf.original"));
+        }
+        else
+        {
+            var existed = File.Exists(configPath);
+            if (existed)
+                CopyAtomically(configPath, Path.Combine(stateDir, "dxvk.conf.original"));
+            SaveState(statePath, new DxvkConfigState(gameRoot, existed));
+        }
+
+        var stagedPath = Path.Combine(stateDir, "dxvk.conf.pending");
+        try
+        {
+            File.WriteAllText(stagedPath, configuration, new UTF8Encoding(false));
+            CopyAtomically(stagedPath, configPath);
+        }
+        finally
+        {
+            if (File.Exists(stagedPath)) File.Delete(stagedPath);
+        }
+    }
+
+    public void RestoreDxvkConfiguration(string gameRoot)
+    {
+        gameRoot = ValidateGameRoot(gameRoot);
+        EnsureSfmClosed(gameRoot, "restoring DXVK configuration");
+        var stateDir = StateDirectory(gameRoot);
+        using var operationLock = AcquireGraphicsOperationLock(stateDir);
+        var statePath = DxvkConfigStateFile(gameRoot);
+        if (!File.Exists(statePath))
+            throw new InvalidOperationException("No saved DXVK configuration backup exists for this SFM folder.");
+        var state = JsonSerializer.Deserialize<DxvkConfigState>(File.ReadAllText(statePath))
+            ?? throw new InvalidDataException("The DXVK configuration backup is invalid.");
+        if (!Path.GetFullPath(state.GameRoot).Equals(gameRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The DXVK configuration backup belongs to another SFM folder.");
+
+        var configPath = Path.Combine(gameRoot, "dxvk.conf");
+        if (state.OriginalExisted)
+        {
+            var backupPath = Path.Combine(stateDir, "dxvk.conf.original");
+            if (!File.Exists(backupPath))
+                throw new FileNotFoundException("The original DXVK configuration backup is missing.", backupPath);
+            CopyAtomically(backupPath, configPath);
+        }
+        else if (File.Exists(configPath))
+        {
+            File.Delete(configPath);
+        }
+
+        File.Delete(statePath);
+        var backupPathToDelete = Path.Combine(stateDir, "dxvk.conf.original");
+        if (File.Exists(backupPathToDelete)) File.Delete(backupPathToDelete);
+    }
 
     public static string? DetectSfmInstall()
     {
@@ -473,28 +621,21 @@ internal sealed class InstallerService
         }
     }
 
-    public async Task InstallAsync(string gameRoot, Release dxvkRelease, ReShadeRelease reshadeRelease, IProgress<string> progress, CancellationToken cancellationToken = default)
+    public async Task InstallAsync(string gameRoot, Release dxvkRelease, ReShadeRelease reshadeRelease, IProgress<string> progress, string? dxvkConfiguration = null, CancellationToken cancellationToken = default)
     {
         gameRoot = ValidateGameRoot(gameRoot);
+        if (dxvkConfiguration is not null)
+            dxvkConfiguration = ValidateDxvkConfiguration(dxvkConfiguration);
         var stateDir = StateDirectory(gameRoot);
         Directory.CreateDirectory(stateDir);
-        FileStream operationLock;
-        try
+        using (AcquireGraphicsOperationLock(stateDir))
         {
-            operationLock = new FileStream(Path.Combine(stateDir, "graphics-install.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        }
-        catch (IOException ex)
-        {
-            throw new InvalidOperationException("Another Modern SFM Patcher operation is already installing graphics files for this SFM folder. Wait for it to finish, then try again.", ex);
-        }
-        using (operationLock)
-        {
-        if (HasBackup(gameRoot))
+        if (HasBackup(gameRoot) && !CanInstallWithExistingBackup(gameRoot))
             throw new InvalidOperationException("This SFM installation already has an active Modern SFM Patcher backup. Restore it before installing again.");
-        if (Process.GetProcessesByName("sfm").Any(p => SamePath(p, Path.Combine(gameRoot, "sfm.exe"))))
+        if (IsSfmRunning(gameRoot))
             throw new InvalidOperationException("Close Source Filmmaker before installing so its DLLs are not locked.");
 
-        var backupPath = Path.Combine(stateDir, "original");
+        var backupPath = Path.Combine(stateDir, "original-" + Guid.NewGuid().ToString("N"));
         var stagingPath = Path.Combine(stateDir, "staging-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(backupPath);
         Directory.CreateDirectory(stagingPath);
@@ -506,6 +647,7 @@ internal sealed class InstallerService
         };
         var stateFile = StateFile(gameRoot);
 
+        var installationStateSaved = false;
         try
         {
             progress.Report($"Downloading DXVK {dxvkRelease.Version}…");
@@ -529,9 +671,10 @@ internal sealed class InstallerService
             var reshadeDll = Path.Combine(reshadeStage, "d3d9.dll");
             VerifyReShadeDll(reshadeDll, reshadeRelease.Version);
 
-            var paths = GetTouchedPaths();
+            var paths = GetTouchedPaths(dxvkConfiguration is not null);
             progress.Report("Backing up existing SFM files…");
             var originals = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var originalHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var relativePath in paths)
             {
                 var source = Path.Combine(gameRoot, relativePath);
@@ -545,6 +688,7 @@ internal sealed class InstallerService
                 Directory.CreateDirectory(Path.GetDirectoryName(backupFile)!);
                 File.Copy(source, backupFile, overwrite: true);
                 originals[relativePath] = relativePath;
+                originalHashes[relativePath] = HashFile(backupFile);
             }
 
             state = new InstallState
@@ -552,9 +696,12 @@ internal sealed class InstallerService
                 GameRoot = gameRoot,
                 BackupPath = backupPath,
                 PreviousModuleOverride = state.PreviousModuleOverride,
-                OriginalFiles = originals
+                OriginalFiles = originals,
+                OriginalHashes = originalHashes,
+                InstallationComplete = false
             };
             SaveState(stateFile, state);
+            installationStateSaved = true;
 
             progress.Report("Installing the ReShade → DXVK chain…");
             var bin = Path.Combine(gameRoot, "bin");
@@ -565,8 +712,14 @@ internal sealed class InstallerService
             PreserveConfig(gameRoot, reshadeStage, Path.Combine(bin, "ReShade2.ini"), "ReShade2.ini");
             PreserveConfig(gameRoot, reshadeStage, Path.Combine(bin, "ReShadePreset.ini"), "ReShadePreset.ini");
 
-            File.Copy(reshadeDll, Path.Combine(bin, "d3d9.dll"), overwrite: true);
-            File.Copy(dxvkDll, Path.Combine(dxvkDir, "d3d9.dll"), overwrite: true);
+            CopyAtomically(reshadeDll, Path.Combine(bin, "d3d9.dll"));
+            CopyAtomically(dxvkDll, Path.Combine(dxvkDir, "d3d9.dll"));
+            if (dxvkConfiguration is not null)
+            {
+                var configurationStage = Path.Combine(stagingPath, "dxvk.conf");
+                await File.WriteAllTextAsync(configurationStage, dxvkConfiguration, new UTF8Encoding(false), cancellationToken);
+                CopyAtomically(configurationStage, Path.Combine(gameRoot, "dxvk.conf"));
+            }
             ConfigureProxyIni(Path.Combine(bin, "ReShade.ini"));
             ConfigureSearchPaths(Path.Combine(bin, "ReShade.ini"));
             ConfigureSearchPaths(Path.Combine(bin, "ReShade2.ini"));
@@ -577,13 +730,15 @@ internal sealed class InstallerService
                 var installedFile = Path.Combine(gameRoot, relativePath);
                 if (File.Exists(installedFile))
                     state.InstalledHashes[relativePath] = HashFile(installedFile);
+                SaveState(stateFile, state);
             }
+            state.InstallationComplete = true;
             SaveState(stateFile, state);
             progress.Report($"Installed ReShade {reshadeRelease.Version} and DXVK {dxvkRelease.Version}.");
         }
         catch
         {
-            if (File.Exists(stateFile))
+            if (installationStateSaved)
                 await RestoreAsync(gameRoot, progress, CancellationToken.None);
             throw;
         }
@@ -737,11 +892,25 @@ internal sealed class InstallerService
             cancellationToken.ThrowIfCancellationRequested();
             var target = SafeCombine(gameRoot, relativePath);
             var existed = originalPath is not null;
-            if (File.Exists(target) && state.InstalledHashes.TryGetValue(relativePath, out var installedHash) &&
-                !HashFile(target).Equals(installedHash, StringComparison.OrdinalIgnoreCase))
+            if (File.Exists(target))
             {
-                keptModified.Add(relativePath);
-                continue;
+                var currentHash = HashFile(target);
+                if (state.InstalledHashes.TryGetValue(relativePath, out var installedHash) &&
+                    !currentHash.Equals(installedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (state.OriginalHashes.TryGetValue(relativePath, out var originalHash) &&
+                        currentHash.Equals(originalHash, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    keptModified.Add(relativePath);
+                    continue;
+                }
+                if (!state.InstallationComplete && !state.InstalledHashes.ContainsKey(relativePath) &&
+                    (!state.OriginalHashes.TryGetValue(relativePath, out var untouchedHash) ||
+                     !currentHash.Equals(untouchedHash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    keptModified.Add(relativePath);
+                    continue;
+                }
             }
 
             if (existed)
@@ -750,7 +919,7 @@ internal sealed class InstallerService
                 if (!File.Exists(backup))
                     throw new FileNotFoundException("A required backup file is missing.", backup);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(backup, target, overwrite: true);
+                CopyAtomically(backup, target);
             }
             else if (File.Exists(target))
             {
@@ -764,7 +933,31 @@ internal sealed class InstallerService
             SetUserModuleOverride(state.PreviousModuleOverride);
 
         TryDeleteEmptyDirectory(Path.Combine(gameRoot, "bin", "dxvk"));
-        File.Delete(stateFile);
+        if (keptModified.Count == 0)
+            File.Delete(stateFile);
+        else
+        {
+            var remainingOriginalFiles = state.OriginalFiles
+                .Where(pair => keptModified.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            var remainingInstalledHashes = state.InstalledHashes
+                .Where(pair => keptModified.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            var remainingOriginalHashes = state.OriginalHashes
+                .Where(pair => keptModified.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            state = new InstallState
+            {
+                GameRoot = state.GameRoot,
+                BackupPath = state.BackupPath,
+                PreviousModuleOverride = state.PreviousModuleOverride,
+                OriginalFiles = remainingOriginalFiles,
+                InstalledHashes = remainingInstalledHashes,
+                OriginalHashes = remainingOriginalHashes,
+                InstallationComplete = true
+            };
+            SaveState(stateFile, state);
+        }
         progress.Report(keptModified.Count == 0
             ? "Original files and environment setting restored."
             : "Restored unchanged files. Kept your later edits to: " + string.Join(", ", keptModified));
@@ -777,14 +970,19 @@ internal sealed class InstallerService
         return Path.GetFullPath(path);
     }
 
-    private static string[] GetTouchedPaths() =>
-    [
-        "bin/d3d9.dll",
-        "bin/dxvk/d3d9.dll",
-        "bin/ReShade.ini",
-        "bin/ReShade2.ini",
-        "bin/ReShadePreset.ini"
-    ];
+    private static string[] GetTouchedPaths(bool includeDxvkConfiguration)
+    {
+        var paths = new List<string>
+        {
+            "bin/d3d9.dll",
+            "bin/dxvk/d3d9.dll",
+            "bin/ReShade.ini",
+            "bin/ReShade2.ini",
+            "bin/ReShadePreset.ini"
+        };
+        if (includeDxvkConfiguration) paths.Add("dxvk.conf");
+        return [.. paths];
+    }
 
     private static void PreserveConfig(string gameRoot, string reshadeStage, string target, string name)
     {
@@ -823,7 +1021,8 @@ internal sealed class InstallerService
             return;
         var text = File.ReadAllText(path)
             .Replace(".\\bin\\reshade-shaders\\Shaders", ".\\reshade-shaders\\Shaders", StringComparison.OrdinalIgnoreCase)
-            .Replace(".\\bin\\reshade-shaders\\Textures", ".\\reshade-shaders\\Textures", StringComparison.OrdinalIgnoreCase);
+            .Replace(".\\bin\\reshade-shaders\\Textures", ".\\reshade-shaders\\Textures", StringComparison.OrdinalIgnoreCase)
+            .Replace("\\**\\**", "\\**", StringComparison.Ordinal);
         File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
@@ -959,7 +1158,26 @@ internal sealed class InstallerService
 
     private static string StateDirectory(string gameRoot) => Path.Combine(StateRoot, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(gameRoot).ToUpperInvariant()))));
     private static string StateFile(string gameRoot) => Path.Combine(StateDirectory(gameRoot), "state.json");
+    private static string DxvkConfigStateFile(string gameRoot) => Path.Combine(StateDirectory(gameRoot), "dxvk-config.json");
     private static string HashFile(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+
+    private static FileStream AcquireGraphicsOperationLock(string stateDir)
+    {
+        try
+        {
+            return new FileStream(Path.Combine(stateDir, "graphics-install.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException("Another Modern SFM Patcher operation is already changing files for this SFM folder. Wait for it to finish, then try again.", ex);
+        }
+    }
+
+    private static void EnsureSfmClosed(string gameRoot, string operation)
+    {
+        if (IsSfmRunning(gameRoot))
+            throw new InvalidOperationException($"Close Source Filmmaker before {operation} so its files are not in use.");
+    }
 
     private static string SafeCombine(string root, string relativePath)
     {
@@ -969,8 +1187,33 @@ internal sealed class InstallerService
         return full;
     }
 
-    private static void SaveState<T>(string path, T state) =>
-        File.WriteAllText(path, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+    private static void SaveState<T>(string path, T state)
+    {
+        var temporary = path + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
+    private static void CopyAtomically(string source, string target)
+    {
+        var temporary = target + ".modern-sfm-patcher-tmp";
+        try
+        {
+            File.Copy(source, temporary, overwrite: true);
+            File.Move(temporary, target, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
 
     private static void SetUserModuleOverride(string? value)
     {

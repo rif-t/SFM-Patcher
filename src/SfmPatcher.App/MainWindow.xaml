@@ -37,9 +37,11 @@
                                     <TextBlock Text="YouTube: rif-t-animation" FontSize="17"/>
                                 </StackPanel>
                             </HyperlinkButton>
-                            <TextBlock x:Name="AppVersionText" Text="Current version: v0.1.0" FontSize="16"/>
+                            <TextBlock x:Name="AppVersionText" Text="Current version: v0.2.0" FontSize="16"/>
                             <Button x:Name="CheckAppVersionButton" Content="Check GitHub version" Click="CheckAppVersionButton_Click" HorizontalAlignment="Left"/>
                             <TextBlock x:Name="AppUpdateStatusText" Text="Check whether a newer version has been published." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Button x:Name="ExportDiagnosticsButton" Content="Export diagnostics report" Click="ExportDiagnosticsButton_Click" HorizontalAlignment="Left"/>
+                            <TextBlock x:Name="DiagnosticsStatusText" Text="The report is saved locally and includes SFM paths and recent logs. Review it before sharing." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         </StackPanel>
                     </Border>
                 </StackPanel></ScrollViewer>
@@ -52,9 +54,41 @@
                         <StackPanel Spacing="14">
                             <TextBlock Text="ReShade version" FontWeight="SemiBold"/><ComboBox x:Name="ReShadeVersionBox" HorizontalAlignment="Stretch"/>
                             <TextBlock Text="DXVK version" FontWeight="SemiBold"/><ComboBox x:Name="DxvkVersionBox" HorizontalAlignment="Stretch"/>
+                            <TextBlock Text="DXVK configuration (optional)" FontWeight="SemiBold"/>
+                            <CheckBox x:Name="UseDxvkConfigCheckBox" Content="Enable editor / include config when installing graphics" Checked="DxvkConfig_Toggled" Unchecked="DxvkConfig_Toggled"/>
+                            <StackPanel x:Name="DxvkConfigEditorPanel" Spacing="8">
+                                <TextBox x:Name="DxvkConfigTextBox" IsEnabled="False" AcceptsReturn="True" Height="112" MaxLength="1048576" TextWrapping="NoWrap" FontFamily="Consolas" PlaceholderText="Paste dxvk.conf settings here, or load a file." ScrollViewer.VerticalScrollBarVisibility="Auto" TextChanged="DxvkConfigTextBox_TextChanged"/>
+                                <StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="LoadDxvkConfigButton" IsEnabled="False" Content="Load file" Click="LoadDxvkConfigButton_Click"/><Button x:Name="LoadInstalledDxvkConfigButton" IsEnabled="False" Content="Load current SFM config" Click="LoadInstalledDxvkConfigButton_Click"/></StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="SaveDxvkConfigButton" Content="Save config only" Click="SaveDxvkConfigButton_Click"/><Button x:Name="RestoreDxvkConfigButton" Content="Restore config backup" Click="RestoreDxvkConfigButton_Click"/><TextBlock x:Name="DxvkConfigStatusText" Text="Save the edited config without reinstalling ReShade or DXVK." VerticalAlignment="Center" TextWrapping="Wrap"/></StackPanel>
+                            </StackPanel>
+                            <TextBlock Text="DXVK HUD display" FontWeight="SemiBold"/>
+                            <Grid ColumnSpacing="12" RowSpacing="4">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <CheckBox x:Name="DxvkHudFpsCheckBox" Grid.Row="0" Grid.Column="0" Content="FPS" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudVersionCheckBox" Grid.Row="0" Grid.Column="1" Content="DXVK version" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudDeviceCheckBox" Grid.Row="0" Grid.Column="2" Content="GPU / driver" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudFrameTimesCheckBox" Grid.Row="1" Grid.Column="0" Content="Frame times" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudDrawCallsCheckBox" Grid.Row="1" Grid.Column="1" Content="Draw calls" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudMemoryCheckBox" Grid.Row="1" Grid.Column="2" Content="VRAM use" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudGpuLoadCheckBox" Grid.Row="2" Grid.Column="0" Content="GPU load" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudPipelinesCheckBox" Grid.Row="2" Grid.Column="1" Content="Pipelines" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudSubmissionsCheckBox" Grid.Row="2" Grid.Column="2" Content="Submissions" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudDescriptorsCheckBox" Grid.Row="3" Grid.Column="0" Content="Descriptors" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudAllocationsCheckBox" Grid.Row="3" Grid.Column="1" Content="Memory allocations" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudApiCheckBox" Grid.Row="3" Grid.Column="2" Content="D3D feature level" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudWorkerStatsCheckBox" Grid.Row="4" Grid.Column="0" Content="Worker stats" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudCompilerCheckBox" Grid.Row="4" Grid.Column="1" Content="Shader compiler" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudSamplersCheckBox" Grid.Row="4" Grid.Column="2" Content="Samplers (D3D9)" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                                <CheckBox x:Name="DxvkHudSwvpCheckBox" Grid.Row="5" Grid.Column="0" Content="Software vertex processing" IsEnabled="False" Checked="DxvkHudOption_Changed" Unchecked="DxvkHudOption_Changed"/>
+                            </Grid>
+                            <TextBlock Text="DXVK reads dxvk.conf from SFM's working directory. If the Windows DXVK_HUD environment variable is set, it overrides the HUD setting here. Other config settings are passed through as written." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                             <StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="InstallButton" Content="Install graphics setup" Click="InstallButton_Click" Style="{ThemeResource AccentButtonStyle}"/><Button Content="Check for updates" Click="CheckUpdatesButton_Click"/></StackPanel>
                             <ProgressBar x:Name="Progress" Visibility="Collapsed" IsIndeterminate="True"/>
                             <TextBlock x:Name="StatusText" Text="Loading available versions…" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock x:Name="InstallAvailabilityText" Text="Select a valid SFM folder to enable installation." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock x:Name="BackupStatusText" Text="No managed graphics backup found." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Button x:Name="OpenBackupButton" Content="Open backup folder" Click="OpenBackupButton_Click" HorizontalAlignment="Left"/>
                             <Button x:Name="UninstallButton" Content="Uninstall graphics setup" Click="UninstallButton_Click" HorizontalAlignment="Left"/>
                         </StackPanel>
                     </Border>
@@ -65,7 +99,7 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <StackPanel Spacing="8">
                         <TextBlock Text="Choose ReShade effects to install" FontSize="24" FontWeight="SemiBold"/>
-                        <TextBlock Text="Choose packages or expand them to select individual effects. Selected files download from the latest upstream repository version. Depth-based effects still require ReShade to see a valid SFM depth buffer." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="Choose packages or expand them to select individual effects. Selected files download from the latest upstream repository version. Effects missing from a package archive are skipped and listed after installation. Depth-based effects still require ReShade to see a valid SFM depth buffer." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button x:Name="CheckAllShadersButton" Content="Check all" Click="CheckAllShadersButton_Click"/>
                             <Button x:Name="UncheckAllShadersButton" Content="Uncheck all" Click="UncheckAllShadersButton_Click"/>
@@ -100,7 +134,7 @@
                     <Border Padding="20" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                         <StackPanel Spacing="12">
                             <TextBlock Text="Skibidi Kitty" FontSize="20" FontWeight="SemiBold"/>
-                            <TextBlock Text="My own global illumination and advanced AO shader." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock Text="My own ambient occlusion and post-processing preset using free ReShade effects." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Button x:Name="InstallPresetButton" Content="Install preset" Click="InstallPresetButton_Click" Style="{ThemeResource AccentButtonStyle}"/>
                                 <Button x:Name="RestorePresetButton" Content="Restore preset and shader files" Click="RestorePresetButton_Click"/>
@@ -111,6 +145,6 @@
                 </StackPanel></ScrollViewer>
             </TabViewItem>
         </TabView>
-        <TextBlock Grid.Row="3" Text="Close SFM before installing or restoring. Existing ReShade profiles are preserved." FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        <TextBlock Grid.Row="3" Text="Windows 10 version 2004 or newer. Close SFM before installing or restoring. Existing ReShade profiles are preserved." FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
     </Grid>
 </Window>
